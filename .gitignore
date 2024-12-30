@@ -31,5 +31,11 @@
 *.out
 *.app
 
+# build
+build/
+
+# IDE
+.vscode/
+
 # macOS
-.DStore
+.DS_Store

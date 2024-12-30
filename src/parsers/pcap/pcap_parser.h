@@ -4,10 +4,11 @@
 #include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <list>
 #include <optional>
 #include <vector>
 
-#include <src/utils/binary.hpp>
+#include <utils/binary.hpp>
 
 namespace parsers::pcap {
 
@@ -43,7 +44,7 @@ struct PCAPPacketHeader {
 
 struct PCAPPacket {
     std::chrono::time_point<std::chrono::system_clock> timestamp;
-    std::chrono::duration<std::chrono::nanoseconds> timestamp_fraction;
+    std::chrono::nanoseconds timestamp_fraction;
     std::vector<char> payload;
 };
 
@@ -59,12 +60,16 @@ public:
     PCAPParser& operator=(PCAPParser&& other);
     ~PCAPParser() = default;
 
+    PCAPPacket read_next() {
+        return read_package();
+    }
 
-
-    void parse(const std::filesystem::path& path) {
+    std::list<PCAPPacket> read_all() {
+        std::list<PCAPPacket> result;
         while (!reader_.Eof()) {
-            read_package();
+            result.emplace_back(read_next());
         }
+        return result;
     }
 
 private:
@@ -90,7 +95,7 @@ private:
             // If 4d bit of "frame_check_seq" is set to 1, then the first 3 bits represent
             // the number of 16-bit (2 byte) words of FCS that are appended to each packet.
             if (header.f[0]) {
-                fcs_size_opt_ = reinterpret_cast<uint8_t>(&header.fcs);
+                fcs_size_opt_ = *(reinterpret_cast<uint8_t*>(&header.fcs));
             }
 
             snap_len_ = header.snap_len;
@@ -100,15 +105,27 @@ private:
         }
     }
 
-    void read_package() {
+    PCAPPacket read_package() {
         // Read packet header.
         PCAPPacketHeader header;
         reader_ >> header;
 
-        // Read next "captured_packet_length" bytes as packet payload.
-        auto packet_data = new char[header.captured_packet_length];
-        reader_ >> packet_data;
+        // Convert timestamps.
+        auto timestamp = std::chrono::system_clock::from_time_t(header.timestamp);
+        std::chrono::nanoseconds timestamp_fraction(header.timestamp_fraction); 
+        if (timestamps_format_ == PCAPTimestampsFormat::SecondsMicroseconds) {
+            timestamp_fraction *= 1000;
+        }
 
+        // Read the next "captured_packet_length" bytes as packet payload.
+        std::vector<char> packet_data(header.captured_packet_length);
+        reader_.read(packet_data.data(), header.captured_packet_length);
+
+        return PCAPPacket{
+            std::move(timestamp),
+            std::move(timestamp_fraction),
+            std::move(packet_data),
+        };
     }
 
     utils::binary::BinaryStreamReader reader_;
@@ -116,7 +133,6 @@ private:
     uint32_t snap_len_;
     uint16_t link_type_;
     std::optional<uint8_t> fcs_size_opt_;
-
 };
 
 } // namespace parsers::pcap
